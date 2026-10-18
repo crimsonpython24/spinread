@@ -5,6 +5,7 @@ G = 9.81
 GVEC = np.array([0.0, 0.0, -G])
 R_BALL = 0.02  # m
 TABLE_HEIGHT = 0.76  # simulator table top; ball center at contact = 0.78 m
+K_MAGNUS, K_DRAG = 0.0075, 0.133  # fitted on a sample of the released data
 
 
 def polyfit(t, y, deg, t0):
@@ -23,6 +24,13 @@ def ball_frame(v):
 
 def spin_label(w0, v0):
     return ball_frame(v0) @ np.asarray(w0) / (2 * np.pi)
+
+
+def air_accel(v, w):
+    """Drag + Magnus acceleration for velocity v, shape (3,) or (N, 3), and spin w."""
+    return -K_DRAG * np.linalg.norm(
+        v, axis=-1, keepdims=True
+    ) * v + K_MAGNUS * np.cross(w, v)
 
 
 def physics_u(t, P, where="center"):

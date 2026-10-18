@@ -1,10 +1,10 @@
 import numpy as np
 
-FPS = 500                       # simulator sampling rate
+FPS = 500  # simulator sampling rate
 G = 9.81
 GVEC = np.array([0.0, 0.0, -G])
-R_BALL = 0.02                   # m
-TABLE_HEIGHT = 0.76             # simulator table top; ball centre at contact = 0.78 m
+R_BALL = 0.02  # m
+TABLE_HEIGHT = 0.76  # simulator table top; ball centre at contact = 0.78 m
 
 
 def polyfit(t, y, deg, t0):
@@ -27,8 +27,8 @@ def spin_label(w0, v0):
     return ball_frame(v0) @ np.asarray(w0) / (2 * np.pi)
 
 
-def physics_u(t, P, where='center'):
-    t0 = t.mean() if where in ('center', 'centre') else t[0]
+def physics_u(t, P, where="center"):
+    t0 = t.mean() if where in ("center", "centre") else t[0]
     c, _ = polyfit(t, P, 2, t0)
     v, a = c[1], 2 * c[2]
     a_ng = a - GVEC

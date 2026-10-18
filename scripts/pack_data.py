@@ -24,6 +24,9 @@ def list_trajectories(folder):
 
 
 def pack_folder(src, out_dir, mode, direction, limit=None):
+    """Pack one mode/direction folder into a single npz. Each trajectory's first sample is dropped:
+    it is stamped 2 ms before the second, but the ball moves only about half a step between them,
+    which shows up as a huge spurious acceleration in finite differences."""
     folder = os.path.join(src, mode, direction)
     names = list_trajectories(folder)
     if limit:
@@ -50,9 +53,10 @@ def pack_folder(src, out_dir, mode, direction, limit=None):
         except (OSError, ValueError) as e:
             skipped.append((name, str(e)))
             continue
-        if p.ndim != 2 or p.shape[1] != 3 or len(t) != len(p) or len(p) == 0:
+        if p.ndim != 2 or p.shape[1] != 3 or len(t) != len(p) or len(p) < 2:
             skipped.append((name, f"bad shapes positions {p.shape}, times {t.shape}"))
             continue
+        p, t = p[1:], t[1:]  # drop the mistimed first sample (see the docstring)
         pos.append(p)
         tim.append(t)
         lengths.append(len(p))
@@ -88,7 +92,7 @@ def pack_folder(src, out_dir, mode, direction, limit=None):
         len_min=int(lengths.min()),
         len_med=int(np.median(lengths)),
         len_max=int(lengths.max()),
-        bounce_counts=np.bincount(nb).tolist(),
+        bounce_counts=np.bincount(nb, minlength=MAX_BOUNCES + 1).tolist(),
     )
 
 
@@ -117,12 +121,13 @@ def main():
 
     print(f"\nPacked in {time.time() - t0:.0f} s\n")
     print(
-        f'{"mode":<13}{"direction":<15}{"n":>7}{"skipped":>9}   length min/median/max   bounces 0/1/2'
+        f'{"mode":<13}{"direction":<15}{"n":>7}{"skipped":>9}   {"length min/median/max":<21}   bounces 0/1/2'
     )
     for r in results:
+        length = f'{r["len_min"]}/{r["len_med"]}/{r["len_max"]}'
         print(
             f'{r["mode"]:<13}{r["direction"]:<15}{r["n"]:>7}{len(r["skipped"]):>9}'
-            f'   {r["len_min"]}/{r["len_med"]}/{r["len_max"]:<14}   {r["bounce_counts"]}'
+            f'   {length:<21}   {r["bounce_counts"]}'
         )
     print(f'\nTotal: {sum(r["n"] for r in results)} trajectories')
     for r in results:
