@@ -1,0 +1,13 @@
+mode,direction,train,dev,test,dropped
+final_lose,left_to_right,3500,500,1000,0
+final_lose,right_to_left,3500,500,1000,0
+final_win,left_to_right,3500,500,1000,0
+final_win,right_to_left,3500,500,1000,0
+first_good,left_to_right,3500,500,1000,0
+first_good,right_to_left,3500,500,1000,0
+first_long,left_to_right,1750,250,500,0
+first_long,right_to_left,1750,250,500,0
+first_short,left_to_right,1750,250,500,0
+first_short,right_to_left,1750,250,500,0
+intermediate,left_to_right,35000,5000,10000,0
+intermediate,right_to_left,35000,5000,10000,0
