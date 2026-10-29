@@ -1,0 +1,13 @@
+shot_type,direction_of_play,total,has_nan,wrong_time_step,spin_too_high,bad_bounce_times,wrong_bounce_count,hit_before_first_bounce,usable
+intermediate,left_to_right,50000,0,0,0,0,0,1267,48733
+intermediate,right_to_left,50000,0,0,0,0,0,1102,48898
+first_good,left_to_right,5000,0,0,0,0,0,2,4998
+first_good,right_to_left,5000,0,0,0,0,0,0,5000
+first_short,left_to_right,2500,0,0,0,0,0,9,2491
+first_short,right_to_left,2500,0,0,0,0,0,9,2491
+first_long,left_to_right,2500,0,0,0,0,0,1,2499
+first_long,right_to_left,2500,0,0,0,0,0,0,2500
+final_win,left_to_right,5000,0,0,0,0,0,356,4644
+final_win,right_to_left,5000,0,0,0,0,0,333,4667
+final_lose,left_to_right,5000,0,0,0,0,0,3102,1898
+final_lose,right_to_left,5000,0,0,0,0,0,3100,1900

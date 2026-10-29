@@ -1,0 +1,12 @@
+[MAIN]
+# put the repository root on the path, as the scripts do, so `spinread` imports
+init-hook=
+    import os, sys;
+    from pylint.config import find_default_config_files;
+    sys.path.insert(0, os.path.dirname(os.path.abspath(next(find_default_config_files()))))
+
+[MESSAGES CONTROL]
+disable=
+    missing-module-docstring,
+    missing-class-docstring,
+    missing-function-docstring,
