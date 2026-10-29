@@ -1,3 +1,10 @@
+"""Pack the released trajectories, clean them and split them 70/10/20.
+
+Reads data/syntheticdata/<shot_type>/<direction>/trajectory_NNNN/ and writes one
+cache/synthetic_<shot_type>_<direction>.npz per folder with every trajectory, its labels
+and its split code, plus results/data_cleaning.csv, split_sizes.csv and trajectories.csv.
+"""
+
 import os
 import sys
 from concurrent.futures import ProcessPoolExecutor
@@ -181,6 +188,7 @@ def prepare_one_folder(shot_type, direction):
             spin_magnitude=float(
                 np.linalg.norm(trajectory["launch_spin"]) / (2 * np.pi)
             ),
+            gyrospin=gyrospin,
             topspin=topspin,
             sidespin=sidespin,
             time_to_first_bounce=(
@@ -191,7 +199,7 @@ def prepare_one_folder(shot_type, direction):
         )
         for number, trajectory in enumerate(trajectories)
         if split_code[number] != DROPPED
-        for topspin, sidespin in [
+        for gyrospin, topspin, sidespin in [
             spin_label(trajectory["launch_spin"], trajectory["launch_velocity"])
         ]
     ]

@@ -4,9 +4,13 @@ import os
 import numpy as np
 
 from spinread.cells import (
+    AFTER_CONTACT_LENGTH,
+    BEFORE_CONTACT_FIT_LENGTH,
+    BOUNCE_FEATURE_NAMES,
     CONTACT_HEIGHT,
     TINY,
     W1_LENGTH,
+    bounce_features,
     estimated_ball_frame,
     fit_arc,
     flight_features,
@@ -82,8 +86,8 @@ def free_flight_end(track, contacts):
 
 
 def features_of_one_track(track):
-    """The W1 and W2 features of a SpinDOE track, built the way build_cells.py builds them
-    for a simulated trajectory, except that the frames are the ones the camera recorded.
+    """The W1, W2 and W3 features of a SpinDOE track, built the way build_cells.py builds
+    them for a simulated trajectory, except that the frames are the ones the camera recorded.
     Returns the features per window, the ball frame of the label, and a few facts about the track.
     """
     contacts = table_contacts(track)
@@ -100,6 +104,30 @@ def features_of_one_track(track):
         features_per_window[window] = flight_features(
             arcs[window], frames[window], int(in_window.sum()), 0.0
         )
+    if contacts:
+        contact = contacts[0]
+        after_contact = (np.arange(len(track)) > contact) & (
+            times <= times[contact] + AFTER_CONTACT_LENGTH + TINY
+        )
+        near_the_contact = in_w2 & (
+            times >= times[flight_end - 1] - BEFORE_CONTACT_FIT_LENGTH - TINY
+        )
+        arc_before_contact = (
+            fit_arc(times[near_the_contact], positions[near_the_contact])
+            if near_the_contact.sum() >= 3
+            else arcs["W2"]
+        )
+        w3_bounce_features = bounce_features(
+            arc_before_contact,
+            frames["W2"],
+            times[after_contact],
+            positions[after_contact],
+        )
+    else:
+        w3_bounce_features = np.zeros(len(BOUNCE_FEATURE_NAMES))
+    features_per_window["W3"] = np.concatenate(
+        [features_per_window["W2"], w3_bounce_features]
+    )
     # the label frame: the heading at the first frame, from the whole-flight arc, because
     # SpinDOE tracks begin where the camera first sees the ball and record no launch velocity
     facts = dict(

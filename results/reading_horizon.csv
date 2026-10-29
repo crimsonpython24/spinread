@@ -1,5 +1,4 @@
-level,top,side
-L1,W1,W1
-L2,W1,W1
-L3,none,W2
-L4,none,none
+level,gyro,top,side
+L1,none,W1,W1
+L2,none,W1,W1
+L3,none,none,W2

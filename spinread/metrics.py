@@ -23,7 +23,7 @@ def sign_accuracy(true_values, predicted_values):
 
 
 def score(true_spins, predicted_spins):
-    # R^2 and RMSE (rev/s) of topspin and sidespin, plus the topspin sign accuracy, as one flat row
+    # R^2 and RMSE (rev/s) of every component, plus the topspin sign accuracy, as one flat row
     true_spins, predicted_spins = np.asarray(true_spins), np.asarray(predicted_spins)
     scores = {}
     for component_number, component_name in enumerate(SPIN_COMPONENT_NAMES):

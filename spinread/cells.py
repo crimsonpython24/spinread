@@ -5,6 +5,7 @@ from scipy.interpolate import CubicSpline
 
 from spinread.physics import (
     BALL_RADIUS,
+    GRAVITY,
     GRAVITY_VECTOR,
     TABLE_HEIGHT,
     ball_frame,
@@ -14,14 +15,17 @@ from spinread.physics import (
 )
 from spinread.data import DEV, DIRECTIONS_OF_PLAY, SHOT_TYPES
 
-WINDOWS = ["W1", "W2"]
+WINDOWS = ["W1", "W2", "W3"]  # first 100 ms; whole flight; flight plus the bounce
 LEVELS = {
     "L1": dict(every_nth_sample=1, noise=0.0),
     "L2": dict(frames_per_second=145.0, noise=0.001, timestamp_jitter=0.00045),
     "L3": dict(every_nth_sample=10, noise=0.005),
-    "L4": dict(every_nth_sample=20, noise=0.005),
 }
 W1_LENGTH = 0.1  # s
+AFTER_CONTACT_LENGTH = 0.05  # s of W3 after the first contact
+BEFORE_CONTACT_FIT_LENGTH = (
+    0.1  # s before contact used to find the impact and the pre-bounce velocity
+)
 CONTACT_HEIGHT = (
     TABLE_HEIGHT + BALL_RADIUS
 )  # the ball centre sits at 0.78 m when it touches
@@ -53,12 +57,34 @@ FLIGHT_FEATURE_NAMES = (
         "too_few_frames",  # 1 when fewer than 3 frames, so no acceleration could be fitted
     ]
 )
-# the y~ and z~ parts of (velocity x magnus acceleration) / |velocity|^2: what the physics
-# baseline inverts, in the order of the two label components (topspin, sidespin)
+# (velocity x magnus acceleration) / |velocity|^2 per axis: what the physics baseline
+# inverts, in the order of the three label components (gyro about x~, top about y~, side
+# about z~); its x~ part is near zero, so the baseline cannot read gyrospin
 SPIN_TIMES_K_COLUMNS = [
-    FLIGHT_FEATURE_NAMES.index(f"spin_times_k_{axis}") for axis in ["y", "z"]
+    FLIGHT_FEATURE_NAMES.index(f"spin_times_k_{axis}") for axis in AXES
 ]
 TOO_FEW_FRAMES_COLUMN = FLIGHT_FEATURE_NAMES.index("too_few_frames")
+BOUNCE_FEATURE_NAMES = (
+    # velocity of the pre-bounce arc at the estimated impact time
+    [f"velocity_before_{axis}" for axis in AXES]
+    # velocity right after the impact, from the gravity-fixed fit
+    + [f"velocity_after_{axis}" for axis in AXES]
+    # after minus before: the x~ part is the along-track kick, the y~ part the sideways kick
+    + [f"velocity_change_{axis}" for axis in AXES]
+    + [
+        "restitution",  # |vertical speed after / vertical speed before|
+        "how_many_frames_after",  # frames in the 50 ms after the contact
+        "impact_gap",  # time from the last pre-bounce frame to the estimated impact
+        "has_bounce",  # 1 for every shot that bounces at all
+        "too_few_frames_after_bounce",  # 1 when fewer than 2 frames show the bounce (kicks left at 0)
+    ]
+)
+# the W3 feature vector: the whole-flight features followed by the bounce features
+FEATURE_NAMES_PER_WINDOW = {
+    "W1": FLIGHT_FEATURE_NAMES,
+    "W2": FLIGHT_FEATURE_NAMES,
+    "W3": FLIGHT_FEATURE_NAMES + BOUNCE_FEATURE_NAMES,
+}
 
 
 def seed_for(level, shot_type, direction, trajectory_id):
@@ -243,6 +269,88 @@ def flight_features(arc, frame, how_many_frames, first_frame_time):
     return features
 
 
+def impact_time(arc_before_contact, first_time_after_contact):
+    # when the pre-bounce arc crosses the contact height, after its last frame
+    height_above_contact = arc_before_contact["position_at_centre"][2] - CONTACT_HEIGHT
+    vertical_velocity, half_vertical_acceleration = (
+        arc_before_contact["velocity_at_centre"][2],
+        arc_before_contact["acceleration"][2] / 2,
+    )
+    if abs(half_vertical_acceleration) > 1e-9:
+        discriminant = (
+            vertical_velocity**2 - 4 * half_vertical_acceleration * height_above_contact
+        )
+        roots = (
+            []
+            if discriminant < 0
+            else [
+                (-vertical_velocity - np.sqrt(discriminant))
+                / (2 * half_vertical_acceleration),
+                (-vertical_velocity + np.sqrt(discriminant))
+                / (2 * half_vertical_acceleration),
+            ]
+        )
+    else:
+        roots = (
+            [-height_above_contact / vertical_velocity]
+            if abs(vertical_velocity) > 1e-9
+            else []
+        )
+    crossings_after_last_frame = [
+        arc_before_contact["centre_time"] + root
+        for root in roots
+        if arc_before_contact["centre_time"] + root
+        >= arc_before_contact["last_time"] - TINY
+    ]
+    when = (
+        min(crossings_after_last_frame)
+        if crossings_after_last_frame
+        else arc_before_contact["last_time"]
+    )
+    return float(
+        np.clip(
+            when,
+            arc_before_contact["last_time"],
+            max(first_time_after_contact, arc_before_contact["last_time"]),
+        )
+    )
+
+
+def bounce_features(
+    arc_before_contact, frame, times_after_contact, positions_after_contact
+):
+    # the velocity just before and just after the impact, in the estimated ball frame
+    features = np.zeros(len(BOUNCE_FEATURE_NAMES))
+    features[10], features[12] = (
+        len(times_after_contact),
+        1.0,
+    )  # frames after, has_bounce
+    if arc_before_contact is None or len(times_after_contact) < 2:
+        features[13] = 1.0  # too few frames after the bounce: the kicks stay 0
+        return features
+    when_the_ball_hit = impact_time(arc_before_contact, times_after_contact[0])
+    velocity_before = velocity_of_arc_at(arc_before_contact, when_the_ball_hit)
+    time_since_impact = times_after_contact - when_the_ball_hit
+    positions_without_gravity = positions_after_contact.copy()
+    positions_without_gravity[:, 2] += GRAVITY / 2 * time_since_impact**2
+    coefficients, _ = fit_polynomial_per_axis(
+        time_since_impact, positions_without_gravity, 1, 0.0
+    )
+    velocity_after = coefficients[1]
+    features[0:3], features[3:6], features[6:9] = (
+        frame @ velocity_before,
+        frame @ velocity_after,
+        frame @ (velocity_after - velocity_before),
+    )
+    features[9] = (
+        abs(velocity_after[2] / velocity_before[2])
+        if abs(velocity_before[2]) > 1e-6
+        else 0.0
+    )
+    features[11] = when_the_ball_hit - arc_before_contact["last_time"]
+    return features
+
+
 def features_of_one_trajectory(
     sample_times, positions, bounce_times, level, random_draws, want_details=False
 ):
@@ -266,6 +374,13 @@ def features_of_one_trajectory(
 
     in_w2 = true_times <= last_free_flight_time + TINY
     in_w1 = in_w2 & (true_times_since_start < W1_LENGTH - TINY)
+    if len(bounce_times) and off_table_sample < len(sample_times):
+        # W3 adds the frames from the first sample clear of the table to 50 ms after contact
+        after_contact = (true_times >= sample_times[off_table_sample] - TINY) & (
+            true_times <= sample_times[contact_sample] + AFTER_CONTACT_LENGTH + TINY
+        )
+    else:
+        after_contact = np.zeros(len(true_times), bool)
 
     features_per_window, fits = {}, {}
     for window, in_window in [("W1", in_w1), ("W2", in_w2)]:
@@ -276,6 +391,32 @@ def features_of_one_trajectory(
             arc, frame, int(in_window.sum()), first_frame_time
         )
         fits[window] = (arc, frame)
+    w2_arc, w2_frame = fits["W2"]
+    if len(bounce_times):
+        # the pre-bounce velocity comes from an arc fitted to the last 100 ms of flight,
+        # which a long flight's single quadratic would get wrong
+        near_the_contact = in_w2 & (
+            true_times >= last_free_flight_time - BEFORE_CONTACT_FIT_LENGTH - TINY
+        )
+        arc_before_contact = (
+            fit_arc(reported_times[near_the_contact], frame_positions[near_the_contact])
+            if near_the_contact.sum() >= 3
+            else w2_arc
+        )
+        fits["pre"] = (arc_before_contact, w2_frame)
+        w3_bounce_features = bounce_features(
+            arc_before_contact,
+            w2_frame,
+            reported_times[after_contact],
+            frame_positions[after_contact],
+        )
+    else:
+        w3_bounce_features = np.zeros(
+            len(BOUNCE_FEATURE_NAMES)
+        )  # no bounce: has_bounce = 0
+    features_per_window["W3"] = np.concatenate(
+        [features_per_window["W2"], w3_bounce_features]
+    )
     if not want_details:
         return features_per_window
     return features_per_window, dict(
@@ -284,6 +425,7 @@ def features_of_one_trajectory(
         frame_positions=frame_positions,
         in_w1=in_w1,
         in_w2=in_w2,
+        after_contact=after_contact,
         fits=fits,
         contact_time=(
             sample_times[contact_sample] - sample_times[0]

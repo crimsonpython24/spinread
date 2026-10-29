@@ -1,3 +1,10 @@
+"""The physics baseline and ridge regression on the 9 cells, scored on dev.
+
+Writes results/baseline_dev.csv, ridge_dev.csv, main_table.csv, ridge_lambda_table.csv,
+reading_horizon.csv, fig_ridge_heatmap.png, and cache/prediction_<method>_<cell>.npz for
+the error analysis.
+"""
+
 import os
 import sys
 
@@ -27,12 +34,12 @@ from spinread.physics import SPIN_COMPONENT_NAMES
 # the lambda grid, tuned on dev per cell and component; up to 1e5 because train has 91,500 rows
 REGULARIZATION_STRENGTHS = np.logspace(-3, 5, 17)
 READABLE_R2 = 0.8  # the proposal's threshold for "the window reveals this component"
-KEY_CELLS = ["W1-L1", "W1-L2", "W2-L3", "W1-L4"]  # Table 1 of the report
+KEY_CELLS = ["W1-L1", "W1-L3", "W2-L3", "W3-L1"]  # Table 1 of the report
 LAMBDA_TABLE_ROWS = [  # Table 2 of the report: (cell, component)
     ("W1-L1", "top"),
     ("W2-L3", "top"),
     ("W2-L3", "side"),
-    ("W1-L4", "top"),
+    ("W3-L2", "gyro"),
 ]
 LAMBDA_TABLE_STRENGTHS = [1e-3, 1.0, 1e3, 1e5]
 pd.set_option("display.width", 200)
@@ -45,12 +52,13 @@ def fit_one_over_k(spin_times_k, labels):
 
 
 def baseline_on_one_cell(window, level, cell):
-    spin_times_k = cell["flight_features"][:, SPIN_TIMES_K_COLUMNS].astype(np.float64)
+    spin_times_k = cell["features"][:, SPIN_TIMES_K_COLUMNS].astype(np.float64)
     labels = cell["spin_label"].astype(np.float64)
     is_train, is_dev = cell["split_code"] == TRAIN, cell["split_code"] == DEV
     # a window with too few frames has u = 0: it is left out of the fit, but it still
-    # predicts 0 on dev and counts against the cell
-    has_u = cell["flight_features"][:, TOO_FEW_FRAMES_COLUMN] == 0
+    # predicts 0 on dev and counts against the cell. W3 shares W2's u, so the baseline
+    # gives the same numbers there and about 0 for gyrospin everywhere
+    has_u = cell["features"][:, TOO_FEW_FRAMES_COLUMN] == 0
     one_over_k = fit_one_over_k(
         spin_times_k[is_train & has_u], labels[is_train & has_u]
     )
@@ -66,7 +74,7 @@ def baseline_on_one_cell(window, level, cell):
 
 
 def ridge_on_one_cell(window, level, cell):
-    features = cell["flight_features"].astype(np.float64)
+    features = cell["features"].astype(np.float64)  # W3: flight plus bounce features
     labels = cell["spin_label"].astype(np.float64)
     is_train, is_dev = cell["split_code"] == TRAIN, cell["split_code"] == DEV
     scaler = StandardScaler().fit(features[is_train])
@@ -127,51 +135,66 @@ def ridge_on_one_cell(window, level, cell):
     return cell_row, lambda_rows
 
 
+COMPONENT_TITLES = {
+    "gyro": "gyrospin (x~)",
+    "top": "topspin/backspin (y~)",
+    "side": "sidespin (z~)",
+}
+
+
 def draw_heatmap(ridge_rows, path):
-    # one panel per component of windows x levels, the dev R^2 written in each cell; a
-    # negative R^2 is coloured as 0 but printed as it is
+    # one grid: rows are the windows, columns the levels grouped by component, the dev R^2
+    # written in each cell; a negative R^2 is coloured as 0 but printed as it is
     colormap = LinearSegmentedColormap.from_list("office", ["white", "#4472C4"])
-    figure, panels = plt.subplots(
-        len(SPIN_COMPONENT_NAMES), 1, figsize=(5.2, 3.6), sharex=True
-    )
-    figure.subplots_adjust(left=0.26, right=0.86, top=0.87, bottom=0.17, hspace=0.35)
     by_cell = ridge_rows.set_index(["window", "level"])
-    for panel, name in zip(panels, SPIN_COMPONENT_NAMES):
-        values = np.array(
-            [[by_cell.loc[(w, l), f"r2_{name}"] for l in LEVELS] for w in WINDOWS]
-        )
-        clipped = np.clip(values, 0, 1)
-        image = panel.imshow(clipped, vmin=0, vmax=1, cmap=colormap, aspect="auto")
-        for row in range(len(WINDOWS)):
-            for column in range(len(LEVELS)):
-                panel.text(
-                    column,
-                    row,
-                    f"{values[row, column]:.2f}",
-                    ha="center",
-                    va="center",
-                    fontsize=10,
-                    color="white" if clipped[row, column] > 0.6 else "black",
-                )
-        panel.set_xticks(
-            range(len(LEVELS)),
+    values = np.array(
+        [
             [
-                "L1\n500 Hz\nno noise",
-                "L2\n145 Hz\n1 mm noise",
-                "L3\n50 Hz\n5 mm noise",
-                "L4\n25 Hz\n5 mm noise",
-            ],
-        )
-        panel.set_yticks(range(len(WINDOWS)), ["W1 first 100 ms", "W2 whole flight"])
-        panel.tick_params(labelsize=8, length=0)
-        panel.set_title(
-            {"top": "topspin/backspin (y~)", "side": "sidespin (z~)"}[name], fontsize=10
-        )
-    figure.colorbar(image, cax=figure.add_axes([0.88, 0.17, 0.02, 0.70]))
-    figure.suptitle(
-        "Ridge on the flight features: dev R² per cell", fontsize=11, y=0.97
+                by_cell.loc[(w, l), f"r2_{name}"]
+                for name in SPIN_COMPONENT_NAMES
+                for l in LEVELS
+            ]
+            for w in WINDOWS
+        ]
     )
-    figure.savefig(path, dpi=200, bbox_inches="tight")
+    clipped = np.clip(values, 0, 1)
+    figure, panel = plt.subplots(figsize=(3.4, 1.75))
+    figure.subplots_adjust(left=0.24, right=0.99, top=0.84, bottom=0.2)
+    panel.imshow(clipped, vmin=0, vmax=1, cmap=colormap, aspect="auto")
+    for row in range(values.shape[0]):
+        for column in range(values.shape[1]):
+            panel.text(
+                column,
+                row,
+                f"{values[row, column]:.2f}",
+                ha="center",
+                va="center",
+                fontsize=6.5,
+                color="white" if clipped[row, column] > 0.6 else "black",
+            )
+    how_many_levels = len(LEVELS)
+    for group in range(1, len(SPIN_COMPONENT_NAMES)):
+        panel.axvline(group * how_many_levels - 0.5, color="black", lw=1)
+    for group, name in enumerate(SPIN_COMPONENT_NAMES):
+        panel.text(
+            group * how_many_levels + (how_many_levels - 1) / 2,
+            -0.75,
+            COMPONENT_TITLES[name],
+            ha="center",
+            va="bottom",
+            fontsize=7,
+        )
+    panel.set_xticks(
+        range(values.shape[1]), list(LEVELS) * len(SPIN_COMPONENT_NAMES), fontsize=6.5
+    )
+    panel.set_yticks(
+        range(len(WINDOWS)), ["W1 first 100 ms", "W2 whole flight", "W3 + bounce"]
+    )
+    panel.tick_params(labelsize=6.5, length=0)
+    panel.set_xlabel(
+        "L1: 500 Hz, no noise;  L2: 145 Hz, 1 mm;  L3: 50 Hz, 5 mm", fontsize=6.5
+    )
+    figure.savefig(path, dpi=250)
     plt.close(figure)
 
 
@@ -198,7 +221,9 @@ def main():
         dict(
             method=method,
             cell=cell,
-            **rows.loc[cell, score_columns + ["rmse_top", "rmse_side"]],
+            **rows.loc[
+                cell, score_columns + [f"rmse_{n}" for n in SPIN_COMPONENT_NAMES]
+            ],
         )
         for cell in KEY_CELLS
         for method, rows in per_method.items()

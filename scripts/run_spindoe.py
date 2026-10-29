@@ -1,3 +1,13 @@
+"""Score the simulator-trained models on the real SpinDOE tracks (Gossard et al., 2023).
+
+SpinDOE is recorded at 145 Hz with about 1 mm of noise: sensing level L2. Each model is the
+one trained on the simulated W1-L2, W2-L2 or W3-L2 cell, applied to the real tracks
+unchanged, then once more with output scales fitted by 5-fold cross-validation: one for
+topspin and sidespin together (the Magnus coefficient of the real ball against the
+simulator's) and one for gyrospin (the bounce friction). Writes results/spindoe_scores.csv,
+spindoe_blocks.csv, spindoe_tracks.csv and fig_spindoe.png.
+"""
+
 import os
 import sys
 
@@ -19,7 +29,7 @@ from spinread.cells import (
 )
 from spinread.data import TRAIN
 from spinread.metrics import r_squared, score
-from spinread.physics import MAGNUS_COEFFICIENT, SPIN_COMPONENT_NAMES
+from spinread.physics import LABEL_ROWS, MAGNUS_COEFFICIENT, SPIN_COMPONENT_NAMES
 from spinread.spindoe import (
     CONSISTENT_ID_RANGES,
     HIGHEST_SPIN_THE_SIMULATOR_DRAWS,
@@ -35,6 +45,9 @@ LEVEL = "L2"
 HOW_MANY_FOLDS, FOLD_SEED = 5, 0
 HOW_MANY_RESAMPLES, BOOTSTRAP_SEED = 2000, 0
 BLOCK_LENGTH = 20  # consecutive track ids per row of the agreement table
+GYRO = SPIN_COMPONENT_NAMES.index("gyro")
+MAGNUS_COMPONENTS = [c for c in range(len(SPIN_COMPONENT_NAMES)) if c != GYRO]
+SHOWN_IN_FIGURE = [("W2", "top"), ("W3", "gyro")]  # Figure 3 of the report
 BLUE, GRAY = "#4472C4", "#A5A5A5"
 pd.set_option("display.width", 250)
 
@@ -43,7 +56,7 @@ def models_trained_on_the_simulator(window):
     # both methods refitted on the train rows of the simulated cell, ridge with the lambda
     # that run_models.py chose on dev
     cell = load_cell(window, LEVEL)
-    features = cell["flight_features"].astype(np.float64)
+    features = cell["features"].astype(np.float64)
     labels = cell["spin_label"].astype(np.float64)
     is_train = cell["split_code"] == TRAIN
     chosen = pd.read_csv("results/ridge_dev.csv").set_index(["window", "level"])
@@ -64,20 +77,25 @@ def models_trained_on_the_simulator(window):
     )
 
 
-def cross_validated_scale(predictions, labels):
-    # one output scale, fitted by least squares on four folds and applied to the fifth, so
-    # no track is scored with its own scale; returns the calibrated predictions and the
-    # mean scale
+def cross_validated_scales(predictions, labels):
+    # one output scale for topspin and sidespin together, one for gyrospin, each fitted by
+    # least squares on four folds and applied to the fifth, so no track is scored with its
+    # own scale; returns the calibrated predictions and the mean of each scale
     fold_of = np.random.default_rng(FOLD_SEED).permutation(len(labels)) % HOW_MANY_FOLDS
-    calibrated, scales = predictions.copy(), []
+    calibrated, magnus_scales, gyro_scales = predictions.copy(), [], []
     for fold in range(HOW_MANY_FOLDS):
-        fit_on = fold_of != fold
-        scales.append(
-            np.sum(predictions[fit_on] * labels[fit_on])
-            / np.sum(predictions[fit_on] ** 2)
+        fit_on, apply_to = fold_of != fold, np.flatnonzero(fold_of == fold)
+        fitted = predictions[fit_on][:, MAGNUS_COMPONENTS]
+        magnus_scales.append(
+            np.sum(fitted * labels[fit_on][:, MAGNUS_COMPONENTS]) / np.sum(fitted**2)
         )
-        calibrated[fold_of == fold] *= scales[-1]
-    return calibrated, float(np.mean(scales))
+        gyro_scales.append(
+            np.sum(predictions[fit_on, GYRO] * labels[fit_on, GYRO])
+            / max(np.sum(predictions[fit_on, GYRO] ** 2), 1e-12)
+        )
+        calibrated[np.ix_(apply_to, MAGNUS_COMPONENTS)] *= magnus_scales[-1]
+        calibrated[apply_to, GYRO] *= gyro_scales[-1]
+    return calibrated, float(np.mean(magnus_scales)), float(np.mean(gyro_scales))
 
 
 def score_with_intervals(labels, predictions):
@@ -95,43 +113,47 @@ def score_with_intervals(labels, predictions):
 
 
 def draw_scatter(rows, path):
-    # measured against the calibrated ridge prediction from the whole flight (W2)
-    figure, panels = plt.subplots(1, 2, figsize=(5.6, 2.9))
-    kept = rows.in_range & rows.clean
-    consistent = rows.in_consistent_block
-    for panel, name in zip(panels, SPIN_COMPONENT_NAMES):
+    # measured against the calibrated ridge prediction: topspin from the whole flight (W2)
+    # and gyrospin with the bounce (W3), stacked
+    figure, panels = plt.subplots(len(SHOWN_IN_FIGURE), 1, figsize=(2.3, 4.1))
+    scored = rows.in_range & rows.clean
+    for panel, (window, name) in zip(panels, SHOWN_IN_FIGURE):
+        kept = scored & (rows.has_bounce if window == "W3" else True)
+        consistent = rows.in_consistent_block[kept]
         measured, predicted = (
             rows.loc[kept, f"true_{name}"],
-            rows.loc[kept, f"ridge_calibrated_W2_{name}"],
+            rows.loc[kept, f"ridge_calibrated_{window}_{name}"],
         )
         limit = 1.05 * max(abs(measured).max(), abs(predicted).max())
         panel.plot([-limit, limit], [-limit, limit], color=GRAY, lw=1)
         panel.scatter(
             measured[~consistent],
             predicted[~consistent],
-            s=10,
+            s=6,
             color=GRAY,
-            label="other tracks",
+            label="flight and label often disagree",
         )
         panel.scatter(
             measured[consistent],
             predicted[consistent],
-            s=10,
+            s=6,
             color=BLUE,
-            label="tracks 0-59, 100-219",
+            label=f"flight and label agree ({int(consistent.sum())} tracks)",
         )
         panel.set_xlim(-limit, limit)
         panel.set_ylim(-limit, limit)
-        panel.set_xlabel(
-            f"measured {'topspin/backspin (y~)' if name == 'top' else 'sidespin (z~)'} (rev/s)"
-        )
+        panel.set_aspect("equal")
+        which = {"top": "topspin/backspin (y~)", "gyro": "gyrospin (x~)"}[name]
+        panel.set_xlabel(f"measured {which} (rev/s)", fontsize=7)
+        panel.set_ylabel(f"predicted from {window} (rev/s)", fontsize=7)
         panel.set_title(
-            f"R² {r_squared(measured, predicted):.2f} (blocks {r_squared(measured[consistent], predicted[consistent]):.2f})",
-            fontsize=9,
+            f"{name}spin, {window}: R² {r_squared(measured, predicted):.2f} "
+            f"(agreeing tracks {r_squared(measured[consistent], predicted[consistent]):.2f})",
+            fontsize=7,
         )
+        panel.tick_params(labelsize=6.5)
         panel.grid(alpha=0.3)
-    panels[0].set_ylabel("predicted (rev/s)")
-    panels[0].legend(fontsize=7, frameon=False, loc="upper left")
+        panel.legend(fontsize=5.5, frameon=False, loc="upper left")
     figure.tight_layout()
     figure.savefig(path, dpi=200)
     plt.close(figure)
@@ -143,7 +165,7 @@ def main():
     for track_number, track in tracks.items():
         per_window, label_frame, facts = features_of_one_track(track)
         spin_world = np.asarray(spins[track_number])
-        labels.append((label_frame @ spin_world / (2 * np.pi))[1:])
+        labels.append((label_frame @ spin_world / (2 * np.pi))[LABEL_ROWS])
         for window in WINDOWS:
             features[window].append(per_window[window])
         rows.append(
@@ -164,25 +186,31 @@ def main():
     features = {window: np.array(features[window]) for window in WINDOWS}
     for c, name in enumerate(SPIN_COMPONENT_NAMES):
         rows[f"true_{name}"] = labels[:, c]
-    subsets = {
-        "scored": (rows.in_range & rows.clean).values,
-        "consistent_blocks": (
-            rows.in_range & rows.clean & rows.in_consistent_block
-        ).values,
-        "faster_than_simulator": (~rows.in_range & rows.clean).values,
-    }
+    scored = (rows.in_range & rows.clean).values
+    consistent, bouncing = rows.in_consistent_block.values, rows.has_bounce.values
     print(
-        f"SpinDOE: {len(rows)} tracks; {int((~rows.clean).sum())} dropped because the flight is not "
-        f"one arc, {int((~rows.in_range).sum())} set aside because the spin exceeds 500 rad/s; "
-        f"{int(subsets['scored'].sum())} scored. Label std (rev/s): "
+        f"SpinDOE: {len(rows)} tracks, {int(bouncing.sum())} with a table contact; "
+        f"{int((~rows.clean).sum())} dropped because the flight is not one arc, "
+        f"{int((~rows.in_range).sum())} set aside because the spin exceeds 500 rad/s; "
+        f"{int(scored.sum())} scored. Label std (rev/s): "
         + ", ".join(
-            f"{name} {labels[subsets['scored'], c].std():.0f}"
+            f"{name} {labels[scored, c].std():.0f}"
             for c, name in enumerate(SPIN_COMPONENT_NAMES)
         )
     )
 
     score_rows = []
     for window in WINDOWS:
+        # W3 is scored on the tracks that bounce; W2 also on those, so the bounce gain of
+        # W3 is a paired comparison
+        subsets = {"faster_than_simulator": (~rows.in_range & rows.clean).values}
+        if window != "W3":
+            subsets |= {"scored": scored, "consistent_blocks": scored & consistent}
+        if window != "W1":
+            subsets |= {
+                "scored_with_bounce": scored & bouncing,
+                "consistent_blocks_with_bounce": scored & bouncing & consistent,
+            }
         for method, predict in models_trained_on_the_simulator(window).items():
             predictions = predict(features[window])
             for c, name in enumerate(SPIN_COMPONENT_NAMES):
@@ -190,32 +218,27 @@ def main():
             for subset, kept in subsets.items():
                 if kept.sum() < 2 * HOW_MANY_FOLDS:
                     continue
+                facts = dict(window=window, subset=subset, method=method)
                 score_rows.append(
-                    dict(
-                        window=window,
-                        subset=subset,
-                        method=method,
-                        calibration="none",
-                        magnus_scale=np.nan,
-                    )
+                    facts
+                    | dict(calibration="none", magnus_scale=np.nan, gyro_scale=np.nan)
                     | score_with_intervals(labels[kept], predictions[kept])
                 )
                 if subset == "faster_than_simulator":
                     continue
-                calibrated, scale = cross_validated_scale(
+                calibrated, magnus_scale, gyro_scale = cross_validated_scales(
                     predictions[kept], labels[kept]
                 )
                 score_rows.append(
-                    dict(
-                        window=window,
-                        subset=subset,
-                        method=method,
+                    facts
+                    | dict(
                         calibration="5-fold",
-                        magnus_scale=scale,
+                        magnus_scale=magnus_scale,
+                        gyro_scale=gyro_scale,
                     )
                     | score_with_intervals(labels[kept], calibrated)
                 )
-                if subset == "scored":
+                if subset in ("scored", "scored_with_bounce"):
                     for c, name in enumerate(SPIN_COMPONENT_NAMES):
                         rows.loc[kept, f"{method}_calibrated_{window}_{name}"] = (
                             calibrated[:, c]
@@ -249,7 +272,15 @@ def main():
     draw_scatter(rows, "results/fig_spindoe.png")
 
     shown = scores[
-        ["window", "subset", "method", "calibration", "how_many", "magnus_scale"]
+        [
+            "window",
+            "subset",
+            "method",
+            "calibration",
+            "how_many",
+            "magnus_scale",
+            "gyro_scale",
+        ]
     ].copy()
     for column in [f"r2_{name}" for name in SPIN_COMPONENT_NAMES] + ["sign_top"]:
         shown[column] = [

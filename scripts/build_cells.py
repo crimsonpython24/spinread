@@ -1,3 +1,9 @@
+"""Cut every usable trajectory into the 9 condition cells (windows W1-W3 x levels L1-L3).
+
+Writes cache/cell_<window>_<level>.npz (the 21 flight features, the label and the split code
+of every trajectory) and results/fig_windows.png, one rally shot as each level sees it.
+"""
+
 import os
 import sys
 import time
@@ -11,6 +17,7 @@ import matplotlib.pyplot as plt
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from spinread.cells import (
+    FEATURE_NAMES_PER_WINDOW,
     FLIGHT_FEATURE_NAMES,
     LEVELS,
     WINDOWS,
@@ -23,10 +30,9 @@ from spinread.physics import ball_frame, spin_label
 
 BLUE, ORANGE, GRAY = "#4472C4", "#ED7D31", "#A5A5A5"
 LEVEL_DESCRIPTIONS = {
-    "L1": "every simulator sample (500 Hz), no noise",
-    "L2": "145 Hz camera, 1 mm noise (like SpinDOE)",
-    "L3": "50 Hz camera, 5 mm noise",
-    "L4": "25 Hz camera, 5 mm noise",
+    "L1": "500 Hz, no noise",
+    "L2": "145 Hz, 1 mm noise",
+    "L3": "50 Hz, 5 mm noise",
 }
 HOW_MANY_FRAMES = FLIGHT_FEATURE_NAMES.index("how_many_frames")
 FIT_RESIDUAL = FLIGHT_FEATURE_NAMES.index("fit_residual_rms")
@@ -74,9 +80,9 @@ def write_cells(level, per_folder):
         flight = np.concatenate([result["features"][window] for result in per_folder])
         np.savez(
             cell_path(window, level),
-            flight_features=flight.astype(np.float32),
+            features=flight.astype(np.float32),
             window_duration=flight[:, DURATION].astype(np.float32),
-            flight_feature_names=np.array(FLIGHT_FEATURE_NAMES),
+            feature_names=np.array(FEATURE_NAMES_PER_WINDOW[window]),
             **{
                 name: np.concatenate([result[name] for result in per_folder])
                 for name in per_folder[0]
@@ -91,12 +97,12 @@ def write_cells(level, per_folder):
 
 def draw_windows_figure(shot_type, direction, trajectory, path):
     # one trajectory, not an average: the true path, the frames each level records in W2,
-    # the subset in W1, and the quadratic fitted to the W2 frames
+    # the subset in W1, and the quadratic fitted to the W2 frames; one panel per level
     positions = trajectory["positions"]
     true_frame = ball_frame(trajectory["launch_velocity"])
     along_launch = (positions - positions[0]) @ true_frame[0]
-    figure, panels = plt.subplots(2, 2, figsize=(11, 8.2))
-    for panel, level in zip(panels.ravel(), LEVELS):
+    figure, panels = plt.subplots(1, len(LEVELS), figsize=(5.6, 2.0), sharey=True)
+    for panel, level in zip(panels, LEVELS):
         features, details = features_of_one_trajectory(
             trajectory["sample_times"],
             trajectory["positions"],
@@ -114,48 +120,51 @@ def draw_windows_figure(shot_type, direction, trajectory, path):
             along_launch,
             positions[:, 2],
             color=GRAY,
-            lw=3,
+            lw=2.5,
             alpha=0.6,
-            label="true ball path (a point every 2 ms)",
+            label="true path (every 2 ms)",
         )
-        panel.axhline(
-            0.78,
-            color=GRAY,
-            lw=0.8,
-            ls=":",
-            label="ball height at table contact (0.78 m)",
-        )
-        if (
-            in_w1.sum() > 20
-        ):  # dense frames: a band under W1 instead of a ring on each frame
+        panel.axhline(0.78, color=GRAY, lw=0.8, ls=":", label="table height")
+        if in_w1.sum() > 20:  # dense frames: a band under W1 instead of a ring on each
             panel.plot(
                 frames_along_launch[in_w1],
                 frames[in_w1, 2],
                 "-",
-                lw=10,
+                lw=8,
                 alpha=0.3,
                 color=ORANGE,
                 solid_capstyle="round",
-                label="frames inside window W1 (first 100 ms)",
+                label="W1 frames (first 100 ms)",
             )
         else:
             panel.plot(
                 frames_along_launch[in_w1],
                 frames[in_w1, 2],
                 "o",
-                ms=9,
+                ms=7,
                 mfc="none",
-                mew=1.5,
+                mew=1.3,
                 color=ORANGE,
-                label="frames inside window W1 (first 100 ms)",
+                label="W1 frames (first 100 ms)",
             )
         panel.plot(
             frames_along_launch[in_w2],
             frames[in_w2, 2],
             "o",
-            ms=3.5,
+            ms=3,
             color=BLUE,
-            label="frames this level records before the bounce (window W2)",
+            label="W2 frames (before the bounce)",
+        )
+        after = details["after_contact"]
+        panel.plot(
+            frames_along_launch[after],
+            frames[after, 2],
+            "s",
+            ms=3.5,
+            mfc="none",
+            mew=1.2,
+            color=BLUE,
+            label="frames up to 50 ms after the bounce (W3)",
         )
         arc, _ = details["fits"]["W2"]
         if arc is not None:
@@ -173,30 +182,39 @@ def draw_windows_figure(shot_type, direction, trajectory, path):
                 fitted[:, 2],
                 "-",
                 color=ORANGE,
-                lw=1.5,
-                label="quadratic fitted to the W2 frames",
+                lw=1.3,
+                label="quadratic fitted to W2",
             )
         panel.set_title(
-            f"{level}, {LEVEL_DESCRIPTIONS[level]}\n"
-            f"{int(features['W1'][HOW_MANY_FRAMES])} frames in W1, {int(features['W2'][HOW_MANY_FRAMES])} in W2, "
-            f"fit error {features['W2'][FIT_RESIDUAL] * 1000:.1f} mm (RMS)",
-            fontsize=9.5,
+            f"{level}: {LEVEL_DESCRIPTIONS[level]}\n"
+            f"frames: W1 {int(features['W1'][HOW_MANY_FRAMES])}, "
+            f"W2 {int(features['W2'][HOW_MANY_FRAMES])}, W3 +{int(after.sum())}",
+            fontsize=7,
         )
-        panel.set_xlabel("distance along the launch direction (m)")
-        panel.set_ylabel("height above the floor (m)")
+        panel.tick_params(labelsize=6.5)
         panel.grid(alpha=0.15)
-    handles, labels = panels[0, 0].get_legend_handles_labels()
+    panels[0].set_ylabel("height above the floor (m)", fontsize=7)
+    figure.supxlabel("distance along the launch direction (m)", fontsize=7, y=0.2)
+    handles, labels = panels[0].get_legend_handles_labels()
     figure.legend(
-        handles, labels, loc="lower center", ncol=3, fontsize=8, frameon=False
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.0),
+        ncol=3,
+        fontsize=6.5,
+        frameon=False,
     )
-    top, side = spin_label(trajectory["launch_spin"], trajectory["launch_velocity"])
+    gyro, top, side = spin_label(
+        trajectory["launch_spin"], trajectory["launch_velocity"]
+    )
     figure.suptitle(
-        f"One example trajectory, not an average: {shot_type}/{direction}/trajectory_{trajectory['trajectory_id']:04d}. "
-        f"True spin: top {top:.0f}, side {side:.0f} rev/s.\nEach panel shows the same ball as seen at one sensing level (L1 to L4).",
-        fontsize=10.5,
+        f"Rally shot {shot_type}/{direction}/{trajectory['trajectory_id']:04d} "
+        f"(gyro {gyro:.0f}, top {top:.0f}, side {side:.0f} rev/s) at each sensing level",
+        fontsize=8,
     )
-    figure.tight_layout(rect=(0, 0.06, 1, 1))
-    figure.savefig(path, dpi=150)
+    figure.subplots_adjust(left=0.08, right=0.99, top=0.78, bottom=0.37, wspace=0.08)
+    figure.savefig(path, dpi=200)
     plt.close(figure)
 
 

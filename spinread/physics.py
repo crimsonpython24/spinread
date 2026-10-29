@@ -1,19 +1,21 @@
 import numpy as np
 
 SAMPLES_PER_SECOND = 500  # the simulator saves a position every 2 ms
-GRAVITY_VECTOR = np.array([0.0, 0.0, -9.81])
+GRAVITY = 9.81  # m/s^2
+GRAVITY_VECTOR = np.array([0.0, 0.0, -GRAVITY])
 BALL_RADIUS = 0.02  # m
 TABLE_HEIGHT = 0.76  # m, top of the simulator's table; the ball centre sits at 0.78 m when it touches
 MAGNUS_COEFFICIENT, DRAG_COEFFICIENT = (
     0.0075,
     0.133,
 )  # fitted on a sample of the released data
-# the two components of a spin label: topspin/backspin (about y~) and sidespin (about z~).
-# gyrospin, about the flight direction x~, produces no Magnus force at launch and is left
-# to the final report, which adds the bounce that reveals it
-SPIN_COMPONENT_NAMES = ["top", "side"]
+# the three components of a spin label: gyrospin (about the flight direction x~),
+# topspin/backspin (about y~) and sidespin (about z~). Gyrospin produces no Magnus force
+# at launch, so only the bounce window W3 can reveal it
+SPIN_COMPONENT_NAMES = ["gyro", "top", "side"]
 TOP = SPIN_COMPONENT_NAMES.index("top")
-LABEL_ROWS = [1, 2]  # the y~ and z~ rows of ball_frame()
+FLIGHT_COMPONENT_NAMES = ["top", "side"]  # the two a flight-only reader can see
+LABEL_ROWS = [0, 1, 2]  # the x~, y~ and z~ rows of ball_frame()
 
 
 def fit_polynomial_per_axis(sample_times, values_per_sample, degree, reference_time):
@@ -33,7 +35,7 @@ def ball_frame(velocity):
 
 
 def spin_label(launch_spin_world, launch_velocity):
-    # (topspin, sidespin) in rev/s, in the ball frame of the true launch velocity
+    # (gyrospin, topspin, sidespin) in rev/s, in the ball frame of the true launch velocity
     return (ball_frame(launch_velocity) @ np.asarray(launch_spin_world) / (2 * np.pi))[
         LABEL_ROWS
     ]
