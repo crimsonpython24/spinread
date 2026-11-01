@@ -1,10 +1,3 @@
-"""Pack the released trajectories, clean them and split them 70/10/20.
-
-Reads data/syntheticdata/<shot_type>/<direction>/trajectory_NNNN/ and writes one
-cache/synthetic_<shot_type>_<direction>.npz per folder with every trajectory, its labels
-and its split code, plus results/data_cleaning.csv, split_sizes.csv and trajectories.csv.
-"""
-
 import os
 import sys
 from concurrent.futures import ProcessPoolExecutor

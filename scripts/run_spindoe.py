@@ -1,13 +1,3 @@
-"""Score the simulator-trained models on the real SpinDOE tracks (Gossard et al., 2023).
-
-SpinDOE is recorded at 145 Hz with about 1 mm of noise: sensing level L2. Each model is the
-one trained on the simulated W1-L2, W2-L2 or W3-L2 cell, applied to the real tracks
-unchanged, then once more with output scales fitted by 5-fold cross-validation: one for
-topspin and sidespin together (the Magnus coefficient of the real ball against the
-simulator's) and one for gyrospin (the bounce friction). Writes results/spindoe_scores.csv,
-spindoe_blocks.csv, spindoe_tracks.csv and fig_spindoe.png.
-"""
-
 import os
 import sys
 
@@ -48,7 +38,8 @@ BLOCK_LENGTH = 20  # consecutive track ids per row of the agreement table
 GYRO = SPIN_COMPONENT_NAMES.index("gyro")
 MAGNUS_COMPONENTS = [c for c in range(len(SPIN_COMPONENT_NAMES)) if c != GYRO]
 SHOWN_IN_FIGURE = [("W2", "top"), ("W3", "gyro")]  # Figure 3 of the report
-BLUE, GRAY = "#4472C4", "#A5A5A5"
+from spinread import plotstyle as st
+
 pd.set_option("display.width", 250)
 
 
@@ -114,8 +105,9 @@ def score_with_intervals(labels, predictions):
 
 def draw_scatter(rows, path):
     # measured against the calibrated ridge prediction: topspin from the whole flight (W2)
-    # and gyrospin with the bounce (W3), stacked
-    figure, panels = plt.subplots(len(SHOWN_IN_FIGURE), 1, figsize=(2.3, 4.1))
+    # above, gyrospin with the bounce (W3) below
+    st.apply()
+    figure, panels = plt.subplots(len(SHOWN_IN_FIGURE), 1, figsize=(2.6, 4.9))
     scored = rows.in_range & rows.clean
     for panel, (window, name) in zip(panels, SHOWN_IN_FIGURE):
         kept = scored & (rows.has_bounce if window == "W3" else True)
@@ -125,37 +117,37 @@ def draw_scatter(rows, path):
             rows.loc[kept, f"ridge_calibrated_{window}_{name}"],
         )
         limit = 1.05 * max(abs(measured).max(), abs(predicted).max())
-        panel.plot([-limit, limit], [-limit, limit], color=GRAY, lw=1)
+        panel.plot([-limit, limit], [-limit, limit], color=st.GRAY, lw=0.8)
         panel.scatter(
             measured[~consistent],
             predicted[~consistent],
             s=6,
-            color=GRAY,
-            label="flight and label often disagree",
+            color=st.GRAY,
+            label="label and flight disagree",
         )
         panel.scatter(
             measured[consistent],
             predicted[consistent],
             s=6,
-            color=BLUE,
-            label=f"flight and label agree ({int(consistent.sum())} tracks)",
+            color=st.BLUE,
+            label=f"label and flight agree ({int(consistent.sum())})",
         )
         panel.set_xlim(-limit, limit)
         panel.set_ylim(-limit, limit)
         panel.set_aspect("equal")
-        which = {"top": "topspin/backspin (y~)", "gyro": "gyrospin (x~)"}[name]
-        panel.set_xlabel(f"measured {which} (rev/s)", fontsize=7)
-        panel.set_ylabel(f"predicted from {window} (rev/s)", fontsize=7)
+        which = {
+            "top": r"topspin/backspin ($\omega_{\tilde y}$)",
+            "gyro": r"gyrospin ($\omega_{\tilde x}$)",
+        }[name]
+        panel.set_xlabel(f"measured {which} (rev/s)")
+        panel.set_ylabel(f"predicted from {window} (rev/s)")
         panel.set_title(
-            f"{name}spin, {window}: R² {r_squared(measured, predicted):.2f} "
-            f"(agreeing tracks {r_squared(measured[consistent], predicted[consistent]):.2f})",
-            fontsize=7,
+            f"{name}spin, {window}: $R^2$ {r_squared(measured, predicted):.2f}\n"
+            f"(agreeing tracks {r_squared(measured[consistent], predicted[consistent]):.2f})"
         )
-        panel.tick_params(labelsize=6.5)
-        panel.grid(alpha=0.3)
-        panel.legend(fontsize=5.5, frameon=False, loc="upper left")
-    figure.tight_layout()
-    figure.savefig(path, dpi=200)
+        panel.grid(True)
+        panel.legend(loc="lower right")
+    st.finish(figure, path)
     plt.close(figure)
 
 

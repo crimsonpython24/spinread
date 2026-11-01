@@ -86,10 +86,6 @@ def free_flight_end(track, contacts):
 
 
 def features_of_one_track(track):
-    """The W1, W2 and W3 features of a SpinDOE track, built the way build_cells.py builds
-    them for a simulated trajectory, except that the frames are the ones the camera recorded.
-    Returns the features per window, the ball frame of the label, and a few facts about the track.
-    """
     contacts = table_contacts(track)
     flight_end = free_flight_end(track, contacts)
     times = track[:, 0] - track[0, 0]

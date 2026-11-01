@@ -1,9 +1,3 @@
-"""Manual error analysis of ridge on two cells: a random sample of 100 dev trajectories,
-ranked by the ridge error, and the dev R^2 of both methods binned by shot type, spin,
-speed and window length. Writes results/errors_<cell>.csv (fill the `cause` column by hand)
-and results/error_bins_<cell>.csv.
-"""
-
 import os
 import sys
 

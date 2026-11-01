@@ -1,5 +1,3 @@
-"""Run the pipeline from the raw data to every table and figure of the report."""
-
 import os
 import subprocess
 import sys

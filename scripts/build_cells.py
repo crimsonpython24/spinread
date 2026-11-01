@@ -1,9 +1,3 @@
-"""Cut every usable trajectory into the 9 condition cells (windows W1-W3 x levels L1-L3).
-
-Writes cache/cell_<window>_<level>.npz (the 21 flight features, the label and the split code
-of every trajectory) and results/fig_windows.png, one rally shot as each level sees it.
-"""
-
 import os
 import sys
 import time
@@ -28,7 +22,9 @@ from spinread.cells import (
 from spinread.data import DROPPED, get_one_trajectory, load_packed_folders, packed_path
 from spinread.physics import ball_frame, spin_label
 
-BLUE, ORANGE, GRAY = "#4472C4", "#ED7D31", "#A5A5A5"
+from spinread import plotstyle as st
+
+BLUE, ORANGE, GRAY = st.BLUE, st.ORANGE, st.GRAY
 LEVEL_DESCRIPTIONS = {
     "L1": "500 Hz, no noise",
     "L2": "145 Hz, 1 mm noise",
@@ -96,6 +92,7 @@ def write_cells(level, per_folder):
 
 
 def draw_windows_figure(shot_type, direction, trajectory, path):
+    st.apply()
     # one trajectory, not an average: the true path, the frames each level records in W2,
     # the subset in W1, and the quadratic fitted to the W2 frames; one panel per level
     positions = trajectory["positions"]
@@ -189,12 +186,10 @@ def draw_windows_figure(shot_type, direction, trajectory, path):
             f"{level}: {LEVEL_DESCRIPTIONS[level]}\n"
             f"frames: W1 {int(features['W1'][HOW_MANY_FRAMES])}, "
             f"W2 {int(features['W2'][HOW_MANY_FRAMES])}, W3 +{int(after.sum())}",
-            fontsize=7,
         )
-        panel.tick_params(labelsize=6.5)
-        panel.grid(alpha=0.15)
-    panels[0].set_ylabel("height above the floor (m)", fontsize=7)
-    figure.supxlabel("distance along the launch direction (m)", fontsize=7, y=0.2)
+        panel.grid(True)
+    panels[0].set_ylabel("height above the floor (m)")
+    figure.supxlabel("distance along the launch direction (m)", y=0.2)
     handles, labels = panels[0].get_legend_handles_labels()
     figure.legend(
         handles,
@@ -202,8 +197,6 @@ def draw_windows_figure(shot_type, direction, trajectory, path):
         loc="lower center",
         bbox_to_anchor=(0.5, 0.0),
         ncol=3,
-        fontsize=6.5,
-        frameon=False,
     )
     gyro, top, side = spin_label(
         trajectory["launch_spin"], trajectory["launch_velocity"]
@@ -211,10 +204,10 @@ def draw_windows_figure(shot_type, direction, trajectory, path):
     figure.suptitle(
         f"Rally shot {shot_type}/{direction}/{trajectory['trajectory_id']:04d} "
         f"(gyro {gyro:.0f}, top {top:.0f}, side {side:.0f} rev/s) at each sensing level",
-        fontsize=8,
+        fontsize=st.TITLE,
     )
     figure.subplots_adjust(left=0.08, right=0.99, top=0.78, bottom=0.37, wspace=0.08)
-    figure.savefig(path, dpi=200)
+    figure.savefig(path, dpi=st.DPI)
     plt.close(figure)
 
 

@@ -1,10 +1,3 @@
-"""The physics baseline and ridge regression on the 9 cells, scored on dev.
-
-Writes results/baseline_dev.csv, ridge_dev.csv, main_table.csv, ridge_lambda_table.csv,
-reading_horizon.csv, fig_ridge_heatmap.png, and cache/prediction_<method>_<cell>.npz for
-the error analysis.
-"""
-
 import os
 import sys
 
@@ -14,7 +7,6 @@ import pandas as pd
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
 from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
 
@@ -30,6 +22,7 @@ from spinread.cells import (
 from spinread.data import DEV, TRAIN
 from spinread.metrics import r_squared, score
 from spinread.physics import SPIN_COMPONENT_NAMES
+from spinread import plotstyle as st
 
 # the lambda grid, tuned on dev per cell and component; up to 1e5 because train has 91,500 rows
 REGULARIZATION_STRENGTHS = np.logspace(-3, 5, 17)
@@ -143,59 +136,67 @@ COMPONENT_TITLES = {
 
 
 def draw_heatmap(ridge_rows, path):
-    # one grid: rows are the windows, columns the levels grouped by component, the dev R^2
-    # written in each cell; a negative R^2 is coloured as 0 but printed as it is
-    colormap = LinearSegmentedColormap.from_list("office", ["white", "#4472C4"])
+    # three grids, one per component (rows are the windows, columns the levels), the dev
+    # R^2 written in each cell; a negative R^2 is colored as 0 but printed as it is.
+    # Two rows of panels: gyrospin and topspin above, sidespin below with the level key.
+    st.apply()
+    colormap = "Blues"
+    figure = plt.figure(figsize=(st.COLUMN_WIDTH * 5 / 7, 2.9 * 5 / 7))
+    grid = figure.add_gridspec(2, 2, hspace=0.55, wspace=0.35)
+    slots = [grid[0, 0], grid[0, 1], grid[1, 0]]
+    long_names = {"gyro": "gyrospin", "top": "topspin", "side": "sidespin"}
+    window_labels = {"W1": "100 ms", "W2": "flight", "W3": "bounce"}
     by_cell = ridge_rows.set_index(["window", "level"])
-    values = np.array(
-        [
+    for column_index, (slot, name) in enumerate(zip(slots, SPIN_COMPONENT_NAMES)):
+        panel = figure.add_subplot(slot)
+        values = np.array(
             [
-                by_cell.loc[(w, l), f"r2_{name}"]
-                for name in SPIN_COMPONENT_NAMES
-                for l in LEVELS
+                [by_cell.loc[(window, level), f"r2_{name}"] for level in LEVELS]
+                for window in WINDOWS
             ]
-            for w in WINDOWS
-        ]
-    )
-    clipped = np.clip(values, 0, 1)
-    figure, panel = plt.subplots(figsize=(3.4, 1.75))
-    figure.subplots_adjust(left=0.24, right=0.99, top=0.84, bottom=0.2)
-    panel.imshow(clipped, vmin=0, vmax=1, cmap=colormap, aspect="auto")
-    for row in range(values.shape[0]):
-        for column in range(values.shape[1]):
-            panel.text(
-                column,
-                row,
-                f"{values[row, column]:.2f}",
-                ha="center",
-                va="center",
-                fontsize=6.5,
-                color="white" if clipped[row, column] > 0.6 else "black",
-            )
-    how_many_levels = len(LEVELS)
-    for group in range(1, len(SPIN_COMPONENT_NAMES)):
-        panel.axvline(group * how_many_levels - 0.5, color="black", lw=1)
-    for group, name in enumerate(SPIN_COMPONENT_NAMES):
-        panel.text(
-            group * how_many_levels + (how_many_levels - 1) / 2,
-            -0.75,
-            COMPONENT_TITLES[name],
-            ha="center",
-            va="bottom",
-            fontsize=7,
         )
-    panel.set_xticks(
-        range(values.shape[1]), list(LEVELS) * len(SPIN_COMPONENT_NAMES), fontsize=6.5
+        clipped = np.clip(values, 0, 1)
+        panel.imshow(clipped, vmin=0, vmax=1, cmap=colormap, aspect="auto")
+        for row in range(values.shape[0]):
+            for column in range(values.shape[1]):
+                panel.text(
+                    column,
+                    row,
+                    f"{values[row, column]:.2f}",
+                    ha="center",
+                    va="center",
+                    fontsize=st.FONT - 1,
+                    color="white" if clipped[row, column] > 0.6 else "black",
+                )
+        panel.set_xticks(range(len(LEVELS)), list(LEVELS))
+        panel.set_yticks(
+            range(len(WINDOWS)),
+            [f"{w} {window_labels[w]}" for w in WINDOWS] if column_index != 1 else [],
+        )
+        panel.set_title(f"{long_names[name]} $\\omega_{{\\tilde {name_axis(name)}}}$")
+        panel.tick_params(length=0)
+        for spine in panel.spines.values():
+            spine.set_visible(False)
+    key = figure.add_subplot(grid[1, 1])
+    key.axis("off")
+    key.text(0, 1.0, "ridge dev $R^2$", fontsize=st.FONT, va="top")
+    key.text(0, 0.74, "levels:", fontsize=st.FONT, va="top")
+    key.text(
+        0,
+        0.5,
+        "L1 500 Hz, clean\nL2 145 Hz, 1 mm\nL3 50 Hz, 5 mm",
+        fontsize=st.FONT - 1,
+        va="top",
+        linespacing=1.6,
     )
-    panel.set_yticks(
-        range(len(WINDOWS)), ["W1 first 100 ms", "W2 whole flight", "W3 + bounce"]
+    st.finish(
+        figure, path, left=0.3, right=0.98, top=0.9, bottom=0.1, hspace=0.65, wspace=0.3
     )
-    panel.tick_params(labelsize=6.5, length=0)
-    panel.set_xlabel(
-        "L1: 500 Hz, no noise;  L2: 145 Hz, 1 mm;  L3: 50 Hz, 5 mm", fontsize=6.5
-    )
-    figure.savefig(path, dpi=250)
     plt.close(figure)
+
+
+def name_axis(name):
+    return {"gyro": "x", "top": "y", "side": "z"}[name]
 
 
 def main():
